@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LinkVault — Bookmarks</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div id="navbar-container"></div>
+
+<div class="page-wrapper">
+  <div class="page-header">
+    <h1 class="page-title">🔖 <span>Bookmarks</span></h1>
+    <button class="btn btn-primary" onclick="openCreate()">+ New Bookmark</button>
+  </div>
+
+  <div id="alert-box"></div>
+
+  <!-- Filter Bar -->
+  <div class="filter-bar">
+    <select class="form-select" id="filter-cat" style="max-width:200px">
+      <option value="">All Categories</option>
+    </select>
+    <input type="text" class="form-control" id="filter-search" placeholder="Search title or URL..." style="max-width:280px"/>
+    <div class="d-flex align-items-center gap-3 ms-2">
+      <div class="form-check mb-0">
+        <input class="form-check-input" type="checkbox" id="filter-fav"/>
+        <label class="form-check-label" for="filter-fav" style="font-size:0.85rem">★ Favorites</label>
+      </div>
+      <div class="form-check mb-0">
+        <input class="form-check-input" type="checkbox" id="filter-arch"/>
+        <label class="form-check-label" for="filter-arch" style="font-size:0.85rem">📦 Archived</label>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="applyFilters()">Apply</button>
+    <button class="btn btn-outline-secondary btn-sm" onclick="clearFilters()">Clear</button>
+  </div>
+
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>URL</th>
+          <th>Category</th>
+          <th>Fav</th>
+          <th>Archived</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="bm-table">
+        <tr class="loading-row"><td colspan="6">
+          <div class="spinner"></div>Loading bookmarks...
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div class="modal fade" id="bmModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-title">New Bookmark</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-alert"></div>
+        <div class="mb-3">
+          <label class="form-label" for="bm-title">Title</label>
+          <input type="text" class="form-control" id="bm-title" placeholder="e.g. MDN Web Docs"/>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="bm-url">URL</label>
+          <input type="text" class="form-control" id="bm-url" placeholder="https://..."/>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="bm-cat">Category</label>
+          <select class="form-select" id="bm-cat">
+            <option value="">— Select category —</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="save-btn" onclick="saveBookmark()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="app.js"></script>
+<script>
+  requireAuth();
+  initNavbar('bookmarks');
+
+  // bmMap stores all bookmarks by id for O(1) lookup
+  let bmMap = {};
+  let categories = [];
+  let modal;
+  let editId = null;
+
+  window.addEventListener('DOMContentLoaded', async () => {
+    modal = new bootstrap.Modal(document.getElementById('bmModal'));
+    await loadCategories();
+    await loadBookmarks();
+  });
+
+  async function loadCategories() {
+    try {
+      categories = await api('/Category') || [];
+      const filterSel = document.getElementById('filter-cat');
+      const bmCatSel  = document.getElementById('bm-cat');
+      categories.forEach(c => {
+        filterSel.innerHTML += `<option value="${c.id}">${escHtml(c.name)}</option>`;
+        bmCatSel.innerHTML  += `<option value="${c.id}">${escHtml(c.name)}</option>`;
+      });
+    } catch(e) { console.error('loadCategories:', e); }
+  }
+
+  async function loadBookmarks(params = '') {
+    document.getElementById('bm-table').innerHTML = `
+      <tr class="loading-row"><td colspan="6">
+        <div class="spinner"></div>Loading...
+      </td></tr>`;
+    try {
+      const data = await api('/Bookmark' + (params ? '?' + params : '')) || [];
+      bmMap = {};
+      data.forEach(b => { bmMap[b.id] = b; });
+      renderTable(data);
+    } catch (err) {
+      showAlert('alert-box', err.message);
+      renderTable([]);
+    }
+  }
+
+  function renderTable(bms) {
+    const tbody = document.getElementById('bm-table');
+    if (!bms || bms.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6">
+        <div class="empty-state">
+          <div class="empty-icon">🔖</div>
+          <h3>No bookmarks yet</h3>
+          <p>Save your first link to get started</p>
+        </div>
+      </td></tr>`;
+      return;
+    }
+    tbody.innerHTML = bms.map(b => {
+      const catName = b.categoryName
+        || categories.find(c => c.id === b.categoryId)?.name
+        || '—';
+      return `
+        <tr id="row-${b.id}">
+          <td data-label="Title">
+            <a href="bookmark.html?id=${b.id}" style="color:var(--text);text-decoration:none;font-weight:500">
+              ${escHtml(b.title)}
+            </a>
+          </td>
+          <td data-label="URL">
+            <a class="url-link" href="${escHtml(b.url)}" target="_blank" rel="noopener">
+              ${escHtml(b.url)}
+            </a>
+          </td>
+          <td data-label="Category">
+            <span class="badge badge-category">${escHtml(catName)}</span>
+          </td>
+          <td data-label="Fav">
+            <button class="btn-toggle" id="fav-${b.id}" title="Toggle favorite"
+              onclick="toggleFav(${b.id})">
+              ${b.isFavorite ? '★' : '☆'}
+            </button>
+          </td>
+          <td data-label="Archived">
+            <button class="btn-toggle" id="arch-${b.id}" title="Toggle archived"
+              onclick="toggleArch(${b.id})">
+              ${b.isArchived ? '📦' : '📂'}
+            </button>
+          </td>
+          <td data-label="Actions">
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-outline-secondary" onclick="openEdit(${b.id})">Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteBm(${b.id})">Delete</button>
+            </div>
+          </td>
+        </tr>`;
+    }).join('');
+  }
+
+  function applyFilters() {
+    const p = new URLSearchParams();
+    const catId  = document.getElementById('filter-cat').value;
+    const search = document.getElementById('filter-search').value.trim();
+    const fav    = document.getElementById('filter-fav').checked;
+    const arch   = document.getElementById('filter-arch').checked;
+    if (catId)  p.set('categoryId', catId);
+    if (search) p.set('search', search);
+    if (fav)    p.set('isFavorite', 'true');
+    if (arch)   p.set('isArchived', 'true');
+    loadBookmarks(p.toString());
+  }
+
+  function clearFilters() {
+    document.getElementById('filter-cat').value = '';
+    document.getElementById('filter-search').value = '';
+    document.getElementById('filter-fav').checked = false;
+    document.getElementById('filter-arch').checked = false;
+    loadBookmarks();
+  }
+
+  function openCreate() {
+    editId = null;
+    document.getElementById('modal-title').textContent = 'New Bookmark';
+    document.getElementById('bm-title').value = '';
+    document.getElementById('bm-url').value   = '';
+    document.getElementById('bm-cat').value   = '';
+    document.getElementById('modal-alert').innerHTML = '';
+    document.getElementById('save-btn').textContent  = 'Save';
+    modal.show();
+  }
+
+  function openEdit(id) {
+    const bm = bmMap[id];
+    if (!bm) { showAlert('alert-box', 'Bookmark data not found, please refresh.'); return; }
+    editId = id;
+    document.getElementById('modal-title').textContent = 'Edit Bookmark';
+    document.getElementById('bm-title').value = bm.title  || '';
+    document.getElementById('bm-url').value   = bm.url    || '';
+    document.getElementById('bm-cat').value   = bm.categoryId != null ? String(bm.categoryId) : '';
+    document.getElementById('modal-alert').innerHTML = '';
+    document.getElementById('save-btn').textContent  = 'Update';
+    modal.show();
+  }
+
+  async function saveBookmark() {
+    const title      = document.getElementById('bm-title').value.trim();
+    const url        = document.getElementById('bm-url').value.trim();
+    const catVal     = document.getElementById('bm-cat').value;
+    const categoryId = catVal !== '' ? parseInt(catVal) : null;
+
+    if (!title) { setModalAlert('Title is required'); return; }
+    if (!url)   { setModalAlert('URL is required');   return; }
+
+    const btn = document.getElementById('save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    try {
+      if (editId) {
+        const existing = bmMap[editId] || {};
+        await api(`/Bookmark/${editId}`, 'PUT', {
+          title,
+          url,
+          categoryId,
+          isFavorite: existing.isFavorite || false,
+          isArchived: existing.isArchived || false,
+        });
+      } else {
+        await api('/Bookmark', 'POST', {
+          title,
+          url,
+          categoryId,
+          isFavorite: false,
+          isArchived: false,
+        });
+      }
+      modal.hide();
+      showAlert('alert-box', editId ? 'Bookmark updated!' : 'Bookmark created!', 'success');
+      loadBookmarks();
+    } catch (err) {
+      setModalAlert(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = editId ? 'Update' : 'Save';
+    }
+  }
+
+  async function toggleFav(id) {
+    const bm = bmMap[id];
+    if (!bm) return;
+    const newVal = !bm.isFavorite;
+    try {
+      await api(`/Bookmark/${id}`, 'PUT', { ...bm, isFavorite: newVal });
+      bm.isFavorite = newVal;
+      const btn = document.getElementById(`fav-${id}`);
+      if (btn) btn.textContent = newVal ? '★' : '☆';
+    } catch (err) { showAlert('alert-box', err.message); }
+  }
+
+  async function toggleArch(id) {
+    const bm = bmMap[id];
+    if (!bm) return;
+    const newVal = !bm.isArchived;
+    try {
+      await api(`/Bookmark/${id}`, 'PUT', { ...bm, isArchived: newVal });
+      bm.isArchived = newVal;
+      const btn = document.getElementById(`arch-${id}`);
+      if (btn) btn.textContent = newVal ? '📦' : '📂';
+    } catch (err) { showAlert('alert-box', err.message); }
+  }
+
+  async function deleteBm(id) {
+    if (!confirm('Delete this bookmark?')) return;
+    try {
+      await api(`/Bookmark/${id}`, 'DELETE');
+      delete bmMap[id];
+      document.getElementById(`row-${id}`)?.remove();
+      showAlert('alert-box', 'Bookmark deleted.', 'success');
+      if (Object.keys(bmMap).length === 0) loadBookmarks();
+    } catch (err) { showAlert('alert-box', err.message); }
+  }
+
+  function setModalAlert(msg) {
+    document.getElementById('modal-alert').innerHTML =
+      `<div class="alert alert-danger">${msg}</div>`;
+  }
+
+  function escHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>

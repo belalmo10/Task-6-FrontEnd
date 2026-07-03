@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LinkVault — Categories</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div id="navbar-container"></div>
+
+<div class="page-wrapper">
+  <div class="page-header">
+    <h1 class="page-title">🗂 <span>Categories</span></h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#catModal" onclick="openCreate()">
+      + New Category
+    </button>
+  </div>
+
+  <div id="alert-box"></div>
+
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Description</th>
+          <th>Bookmarks</th>
+          <th>Notes</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="cat-table">
+        <tr class="loading-row"><td colspan="5">
+          <div class="spinner"></div>Loading categories...
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal fade" id="catModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-title">New Category</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-alert"></div>
+        <div class="mb-3">
+          <label class="form-label" for="cat-name">Name</label>
+          <input type="text" class="form-control" id="cat-name" placeholder="e.g. Design Resources" required/>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="cat-desc">Description <span style="color:var(--text-muted);font-weight:400">(optional)</span></label>
+          <textarea class="form-control" id="cat-desc" rows="3" placeholder="What's this category for?"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="save-btn" onclick="saveCategory()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="app.js"></script>
+<script>
+  requireAuth();
+  initNavbar('categories');
+
+  let editId = null;
+  let modal;
+
+  window.addEventListener('DOMContentLoaded', () => {
+    modal = new bootstrap.Modal(document.getElementById('catModal'));
+    loadCategories();
+  });
+
+  async function loadCategories() {
+    try {
+      const data = await api('/Category');
+      renderTable(data);
+    } catch (err) {
+      showAlert('alert-box', err.message);
+      renderTable([]);
+    }
+  }
+
+  function renderTable(cats) {
+    const tbody = document.getElementById('cat-table');
+    if (!cats || cats.length === 0) {
+      tbody.innerHTML = `
+        <tr><td colspan="5">
+          <div class="empty-state">
+            <div class="empty-icon">🗂</div>
+            <h3>No categories yet</h3>
+            <p>Create your first category to get started</p>
+          </div>
+        </td></tr>`;
+      return;
+    }
+    tbody.innerHTML = cats.map(c => `
+      <tr>
+        <td data-label="Name"><strong>${escHtml(c.name)}</strong></td>
+        <td data-label="Description">${escHtml(c.description || '—')}</td>
+        <td data-label="Bookmarks"><span class="badge badge-count">${c.bookmarksCount ?? '—'}</span></td>
+        <td data-label="Notes"><span class="badge badge-count">${c.notesCount ?? '—'}</span></td>
+        <td data-label="Actions">
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openEdit(${c.id},'${escAttr(c.name)}','${escAttr(c.description||'')}')">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteCategory(${c.id})">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  function openCreate() {
+    editId = null;
+    document.getElementById('modal-title').textContent = 'New Category';
+    document.getElementById('cat-name').value = '';
+    document.getElementById('cat-desc').value = '';
+    document.getElementById('modal-alert').innerHTML = '';
+    document.getElementById('save-btn').textContent = 'Save';
+  }
+
+  function openEdit(id, name, desc) {
+    editId = id;
+    document.getElementById('modal-title').textContent = 'Edit Category';
+    document.getElementById('cat-name').value = name;
+    document.getElementById('cat-desc').value = desc;
+    document.getElementById('modal-alert').innerHTML = '';
+    document.getElementById('save-btn').textContent = 'Update';
+    modal.show();
+  }
+
+  async function saveCategory() {
+    const name = document.getElementById('cat-name').value.trim();
+    const description = document.getElementById('cat-desc').value.trim();
+    if (!name) return;
+
+    const btn = document.getElementById('save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    try {
+      if (editId) {
+        await api(`/Category/${editId}`, 'PUT', { name, description });
+      } else {
+        await api('/Category', 'POST', { name, description });
+      }
+      modal.hide();
+      showAlert('alert-box', editId ? 'Category updated!' : 'Category created!', 'success');
+      loadCategories();
+    } catch (err) {
+      document.getElementById('modal-alert').innerHTML = `<div class="alert alert-danger">${err.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = editId ? 'Update' : 'Save';
+    }
+  }
+
+  async function deleteCategory(id) {
+    if (!confirm('Delete this category?')) return;
+    try {
+      await api(`/Category/${id}`, 'DELETE');
+      showAlert('alert-box', 'Category deleted.', 'success');
+      loadCategories();
+    } catch (err) {
+      showAlert('alert-box', err.message);
+    }
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function escAttr(s) {
+    return String(s).replace(/'/g,"&#39;").replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>

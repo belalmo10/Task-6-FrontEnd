@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LinkVault — Notes</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div id="navbar-container"></div>
+
+<div class="page-wrapper">
+  <div class="page-header">
+    <h1 class="page-title">📝 <span>Notes</span></h1>
+    <button class="btn btn-primary" onclick="openCreate()">+ New Note</button>
+  </div>
+
+  <div id="alert-box"></div>
+
+  <!-- Filter -->
+  <div class="filter-bar">
+    <select class="form-select" id="filter-cat" style="max-width:220px" onchange="applyFilter()">
+      <option value="">All Categories</option>
+    </select>
+  </div>
+
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Content</th>
+          <th>Category</th>
+          <th>Pinned</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="notes-table">
+        <tr class="loading-row"><td colspan="5">
+          <div class="spinner"></div>Loading notes...
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div class="modal fade" id="noteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-title">New Note</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-alert"></div>
+        <div class="mb-3">
+          <label class="form-label" for="note-title">Title</label>
+          <input type="text" class="form-control" id="note-title" placeholder="Note title..." required/>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="note-content">Content</label>
+          <textarea class="form-control" id="note-content" rows="4" placeholder="Write your note..."></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="note-cat">Category</label>
+          <select class="form-select" id="note-cat">
+            <option value="">— Select category (optional) —</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="save-btn" onclick="saveNote()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="app.js"></script>
+<script>
+  requireAuth();
+  initNavbar('notes');
+
+  let editId = null;
+  let allNotes = [];
+  let categories = [];
+  let modal;
+
+  window.addEventListener('DOMContentLoaded', async () => {
+    modal = new bootstrap.Modal(document.getElementById('noteModal'));
+    await loadCategories();
+    await loadNotes();
+  });
+
+  async function loadCategories() {
+    try {
+      categories = await api('/Category') || [];
+      const filterSel = document.getElementById('filter-cat');
+      const noteCat = document.getElementById('note-cat');
+      categories.forEach(c => {
+        filterSel.innerHTML += `<option value="${c.id}">${escHtml(c.name)}</option>`;
+        noteCat.innerHTML += `<option value="${c.id}">${escHtml(c.name)}</option>`;
+      });
+    } catch {}
+  }
+
+  async function loadNotes(catId = '') {
+    try {
+      const params = catId ? `?categoryId=${catId}` : '';
+      const data = await api('/Note' + params);
+      allNotes = data || [];
+      renderTable(allNotes);
+    } catch (err) {
+      showAlert('alert-box', err.message);
+      renderTable([]);
+    }
+  }
+
+  function applyFilter() {
+    const catId = document.getElementById('filter-cat').value;
+    loadNotes(catId);
+  }
+
+  function renderTable(notes) {
+    const tbody = document.getElementById('notes-table');
+    if (!notes || notes.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5">
+        <div class="empty-state">
+          <div class="empty-icon">📝</div>
+          <h3>No notes yet</h3>
+          <p>Create your first note</p>
+        </div>
+      </td></tr>`;
+      return;
+    }
+    tbody.innerHTML = notes.map(n => {
+      const catName = n.categoryName || categories.find(c => c.id === n.categoryId)?.name || '—';
+      const truncated = (n.content || '').length > 80
+        ? escHtml(n.content.substring(0, 80)) + '...'
+        : escHtml(n.content || '');
+      return `
+      <tr>
+        <td data-label="Title"><strong>${escHtml(n.title)}</strong></td>
+        <td data-label="Content" style="color:var(--text-muted);font-size:0.88rem">${truncated || '—'}</td>
+        <td data-label="Category"><span class="badge badge-category">${escHtml(catName)}</span></td>
+        <td data-label="Pinned">
+          <button class="btn-toggle" title="Toggle pin" onclick="togglePin(${n.id},${!n.isPinned},this)">
+            ${n.isPinned ? '📌' : '📍'}
+          </button>
+        </td>
+        <td data-label="Actions">
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openEdit(${n.id})">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteNote(${n.id})">Delete</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function openCreate() {
+    editId = null;
+    document.getElementById('modal-title').textContent = 'New Note';
+    document.getElementById('note-title').value = '';
+    document.getElementById('note-content').value = '';
+    document.getElementById('note-cat').value = '';
+    document.getElementById('modal-alert').innerHTML = '';
+    document.getElementById('save-btn').textContent = 'Save';
+    modal.show();
+  }
+
+  function openEdit(id) {
+    const n = allNotes.find(x => x.id === id);
+    if (!n) return;
+    editId = id;
+    document.getElementById('modal-title').textContent = 'Edit Note';
+    document.getElementById('note-title').value = n.title;
+    document.getElementById('note-content').value = n.content || '';
+    document.getElementById('note-cat').value = n.categoryId || '';
+    document.getElementById('modal-alert').innerHTML = '';
+    document.getElementById('save-btn').textContent = 'Update';
+    modal.show();
+  }
+
+  async function saveNote() {
+    const title = document.getElementById('note-title').value.trim();
+    const content = document.getElementById('note-content').value.trim();
+    const categoryId = parseInt(document.getElementById('note-cat').value) || null;
+    if (!title) return;
+
+    const btn = document.getElementById('save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    try {
+      const existing = editId ? allNotes.find(n => n.id === editId) : null;
+      const body = { title, content, categoryId, isPinned: existing?.isPinned || false };
+      if (editId) {
+        await api(`/Note/${editId}`, 'PUT', body);
+      } else {
+        await api('/Note', 'POST', body);
+      }
+      modal.hide();
+      showAlert('alert-box', editId ? 'Note updated!' : 'Note created!', 'success');
+      loadNotes(document.getElementById('filter-cat').value);
+    } catch (err) {
+      document.getElementById('modal-alert').innerHTML = `<div class="alert alert-danger">${err.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = editId ? 'Update' : 'Save';
+    }
+  }
+
+  async function togglePin(id, newVal, btn) {
+    const n = allNotes.find(x => x.id === id);
+    if (!n) return;
+    try {
+      await api(`/Note/${id}`, 'PUT', { ...n, isPinned: newVal });
+      btn.textContent = newVal ? '📌' : '📍';
+      n.isPinned = newVal;
+    } catch (err) { showAlert('alert-box', err.message); }
+  }
+
+  async function deleteNote(id) {
+    if (!confirm('Delete this note?')) return;
+    try {
+      await api(`/Note/${id}`, 'DELETE');
+      showAlert('alert-box', 'Note deleted.', 'success');
+      loadNotes(document.getElementById('filter-cat').value);
+    } catch (err) { showAlert('alert-box', err.message); }
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>

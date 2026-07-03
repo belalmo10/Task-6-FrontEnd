@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LinkVault — Bookmark</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div id="navbar-container"></div>
+
+<div class="page-wrapper">
+  <div class="mb-3">
+    <a href="bookmarks.html" class="btn btn-outline-secondary btn-sm">← Back to Bookmarks</a>
+  </div>
+
+  <div id="alert-box"></div>
+  <div id="bm-detail">
+    <div class="detail-card">
+      <div class="spinner" style="margin:2rem auto"></div>
+    </div>
+  </div>
+
+  <!-- Notes Section -->
+  <div id="notes-section" style="display:none">
+    <div class="page-header mt-4">
+      <h2 class="page-title" style="font-size:1.2rem">📝 <span>Notes on this Bookmark</span></h2>
+      <button class="btn btn-primary btn-sm" onclick="openAddNote()">+ Add Note</button>
+    </div>
+    <div id="notes-list"></div>
+  </div>
+</div>
+
+<!-- Add Note Modal -->
+<div class="modal fade" id="noteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Add Note</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="note-modal-alert"></div>
+        <div class="mb-3">
+          <label class="form-label" for="note-title-input">Title</label>
+          <input type="text" class="form-control" id="note-title-input" placeholder="Note title..."/>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="note-content">Content</label>
+          <textarea class="form-control" id="note-content" rows="4" placeholder="Write your note..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="note-save-btn" onclick="addNote()">Save Note</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="app.js"></script>
+<script>
+  requireAuth();
+  initNavbar('bookmarks');
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const bmId = parseInt(urlParams.get('id'));
+  if (!bmId) window.location.href = 'bookmarks.html';
+
+  let noteModal;
+  let bmData = null;
+
+  window.addEventListener('DOMContentLoaded', async () => {
+    noteModal = new bootstrap.Modal(document.getElementById('noteModal'));
+    await loadBookmark();
+  });
+
+  // ── Load Bookmark Detail ──
+  async function loadBookmark() {
+    try {
+      bmData = await api(`/Bookmark/${bmId}`);
+      renderDetail(bmData);
+      document.getElementById('notes-section').style.display = 'block';
+      await loadNotes();
+    } catch (err) {
+      document.getElementById('bm-detail').innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <h3>Could not load bookmark</h3>
+          <p>${escHtml(err.message)}</p>
+        </div>`;
+    }
+  }
+
+  function renderDetail(bm) {
+    document.title = `LinkVault — ${bm.title}`;
+    const catName = bm.categoryName || '—';
+    const created = bm.createdAt ? new Date(bm.createdAt).toLocaleDateString('en-GB', {
+      day:'2-digit', month:'short', year:'numeric'
+    }) : null;
+
+    document.getElementById('bm-detail').innerHTML = `
+      <div class="detail-card">
+        <div class="row g-3">
+          <div class="col-12">
+            <div class="detail-label">Title</div>
+            <div class="detail-value" style="font-size:1.25rem;font-family:'Syne',sans-serif;font-weight:700">
+              ${escHtml(bm.title)}
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="detail-label">URL</div>
+            <div class="detail-value">
+              <a href="${escHtml(bm.url)}" target="_blank" rel="noopener"
+                style="color:var(--accent);word-break:break-all;">
+                ${escHtml(bm.url)}
+              </a>
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <div class="detail-label">Category</div>
+            <div class="detail-value">
+              <span class="badge badge-category">${escHtml(catName)}</span>
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <div class="detail-label">Favorite</div>
+            <div class="detail-value">
+              <span class="status-pill ${bm.isFavorite ? 'status-yes' : 'status-no'}">
+                ${bm.isFavorite ? '★ Yes' : '☆ No'}
+              </span>
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <div class="detail-label">Archived</div>
+            <div class="detail-value">
+              <span class="status-pill ${bm.isArchived ? 'status-yes' : 'status-no'}">
+                ${bm.isArchived ? '📦 Yes' : '📂 No'}
+              </span>
+            </div>
+          </div>
+          ${created ? `
+          <div class="col-sm-4">
+            <div class="detail-label">Created</div>
+            <div class="detail-value" style="color:var(--text-muted);font-size:0.88rem">
+              ${created}
+            </div>
+          </div>` : ''}
+        </div>
+      </div>`;
+  }
+
+  // ── Load Notes ──
+  // Tries both common endpoint patterns for bookmark notes
+  async function loadNotes() {
+    const container = document.getElementById('notes-list');
+    container.innerHTML = `<div class="spinner" style="margin:2rem auto"></div>`;
+    try {
+      // Pattern 1: /Bookmark/{id}/Note  (nested)
+      let notes = null;
+      try {
+        notes = await api(`/Bookmark/${bmId}/Note`);
+      } catch(e) {
+        // Pattern 2: /Note?bookmarkId={id}
+        notes = await api(`/Note?bookmarkId=${bmId}`);
+      }
+
+      notes = notes || [];
+      renderNotes(notes);
+    } catch (err) {
+      container.innerHTML = `<div class="alert alert-danger">${escHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderNotes(notes) {
+    const container = document.getElementById('notes-list');
+    if (!notes.length) {
+      container.innerHTML = `
+        <div class="empty-state" style="padding:2rem">
+          <div class="empty-icon">📝</div>
+          <h3>No notes yet</h3>
+          <p>Add a note to this bookmark</p>
+        </div>`;
+      return;
+    }
+    container.innerHTML = notes.map(n => `
+      <div class="note-card" id="note-${n.id}">
+        <div class="note-content">
+          ${n.title ? `<strong style="font-size:0.9rem;display:block;margin-bottom:0.25rem">${escHtml(n.title)}</strong>` : ''}
+          <p class="note-text">${escHtml(n.content || '')}</p>
+          ${n.createdAt
+            ? `<small style="color:var(--text-muted)">${new Date(n.createdAt).toLocaleDateString()}</small>`
+            : ''}
+        </div>
+        <button class="btn btn-sm btn-danger ms-3" onclick="deleteNote(${n.id})">Delete</button>
+      </div>
+    `).join('');
+  }
+
+  // ── Add Note ──
+  function openAddNote() {
+    document.getElementById('note-title-input').value = '';
+    document.getElementById('note-content').value = '';
+    document.getElementById('note-modal-alert').innerHTML = '';
+    noteModal.show();
+  }
+
+  async function addNote() {
+    const title   = document.getElementById('note-title-input').value.trim();
+    const content = document.getElementById('note-content').value.trim();
+    if (!content && !title) {
+      document.getElementById('note-modal-alert').innerHTML =
+        `<div class="alert alert-danger">Please enter a title or content.</div>`;
+      return;
+    }
+
+    const btn = document.getElementById('note-save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    try {
+      // Try nested endpoint first, fallback to standalone with bookmarkId
+      try {
+        await api(`/Bookmark/${bmId}/Note`, 'POST', { title, content });
+      } catch(e) {
+        await api(`/Note`, 'POST', { title, content, bookmarkId: bmId });
+      }
+      noteModal.hide();
+      showAlert('alert-box', 'Note added!', 'success');
+      loadNotes();
+    } catch (err) {
+      document.getElementById('note-modal-alert').innerHTML =
+        `<div class="alert alert-danger">${escHtml(err.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Save Note';
+    }
+  }
+
+  // ── Delete Note ──
+  async function deleteNote(id) {
+    if (!confirm('Delete this note?')) return;
+    try {
+      // Try nested endpoint first
+      try {
+        await api(`/Bookmark/${bmId}/Note/${id}`, 'DELETE');
+      } catch(e) {
+        await api(`/Note/${id}`, 'DELETE');
+      }
+      document.getElementById(`note-${id}`)?.remove();
+      showAlert('alert-box', 'Note deleted.', 'success');
+    } catch (err) { showAlert('alert-box', err.message); }
+  }
+
+  function escHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>
